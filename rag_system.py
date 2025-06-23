@@ -21,25 +21,48 @@ class RAGSystem:
             self.collection_name = os.getenv("QDRANT_COLLECTION_NAME", "manual_mantenimiento")
             self.groq_api_key = os.getenv("GROQ_API_KEY")
             
+            # Log de configuración sin exponer secrets
+            logger.info("🔐 Inicializando RAG System...")
+            logger.info(f"✅ QDRANT_URL configurada: {bool(self.qdrant_url)}")
+            logger.info(f"✅ QDRANT_API_KEY configurada: {bool(self.qdrant_api_key)}")
+            logger.info(f"✅ GROQ_API_KEY configurada: {bool(self.groq_api_key)}")
+            logger.info(f"📦 Collection: {self.collection_name}")
+            
             # Validar configuración
-            if not all([self.qdrant_url, self.qdrant_api_key, self.groq_api_key]):
-                raise ValueError("Faltan variables de entorno: QDRANT_URL, QDRANT_API_KEY, GROQ_API_KEY")
+            missing_vars = []
+            if not self.qdrant_url:
+                missing_vars.append("QDRANT_URL")
+            if not self.qdrant_api_key:
+                missing_vars.append("QDRANT_API_KEY")
+            if not self.groq_api_key:
+                missing_vars.append("GROQ_API_KEY")
+                
+            if missing_vars:
+                logger.warning(f"⚠️ Variables faltantes: {', '.join(missing_vars)}")
+                logger.warning("🔄 Sistema funcionará en modo limitado con respuestas mock")
+                self.qdrant_client = None
+                self.groq_client = None
+                self.embedding_model = None
+                return
             
             # Inicializar clientes
+            logger.info("🔗 Conectando a Qdrant Cloud...")
             self.qdrant_client = QdrantClient(
                 url=self.qdrant_url,
                 api_key=self.qdrant_api_key
             )
             
+            logger.info("🤖 Inicializando cliente Groq...")
             self.groq_client = Groq(api_key=self.groq_api_key)
             
             # Modelo de embeddings (compatible con CPU)
-            logger.info("Cargando modelo de embeddings...")
+            logger.info("🧠 Cargando modelo de embeddings...")
             self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("Sistema RAG inicializado correctamente")
+            logger.info("✅ Sistema RAG inicializado correctamente")
             
         except Exception as e:
-            logger.error(f"Error inicializando RAG: {str(e)}")
+            logger.error(f"❌ Error inicializando RAG: {str(e)}")
+            logger.warning("🔄 Sistema funcionará en modo limitado")
             self.qdrant_client = None
             self.groq_client = None
             self.embedding_model = None
