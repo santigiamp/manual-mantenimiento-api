@@ -236,17 +236,6 @@ async def system_info():
             "api_framework": "FastAPI",
             "deployment": "Render (free plan compatible)"
         },
-@app.get("/system-info")
-async def system_info():
-    """Información técnica del sistema"""
-    return {
-        "architecture": {
-            "embeddings": "HuggingFace Inference API (remote)",
-            "vector_database": "Qdrant Cloud",
-            "llm": "Groq (Llama 3.1 70B)",
-            "api_framework": "FastAPI",
-            "deployment": "Render (free plan compatible)"
-        },
         "workflow": [
             "1. 👤 Usuario envía consulta",
             "2. 🔢 HuggingFace genera embedding remoto",
