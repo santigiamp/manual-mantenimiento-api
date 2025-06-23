@@ -5,3 +5,4 @@ httpx
 groq
 python-dotenv
 pydantic
+psutil
