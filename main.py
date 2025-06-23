@@ -1,4 +1,5 @@
 import os
+import sys
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -27,8 +28,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicializar sistema RAG
-logger.info("Inicializando sistema RAG...")
+# Inicializar sistema RAG al startup
+logger.info("🚀 Inicializando Manual Mantenimiento API...")
 rag_system = RAGSystem()
 
 # Modelos de datos
@@ -41,8 +42,19 @@ class QueryResponse(BaseModel):
     sources: List[str] = []
     metadata: Dict[str, Any] = {}
 
-class DocumentRequest(BaseModel):
-    documents: List[Dict[str, Any]]
+@app.on_event("startup")
+async def startup_event():
+    """Eventos de inicio"""
+    logger.info("🎯 API iniciada exitosamente")
+    
+    # Verificar estado del RAG
+    health = rag_system.health_check()
+    if health["overall_status"] == "healthy":
+        logger.info("✅ Sistema RAG completamente operacional")
+    elif health["overall_status"] == "partial":
+        logger.warning("⚠️ Sistema RAG parcialmente operacional")
+    else:
+        logger.warning("🔄 Sistema RAG en modo limitado - usando respuestas mock")
 
 @app.get("/")
 async def root():
@@ -51,21 +63,59 @@ async def root():
         "status": "running",
         "version": "1.0.0",
         "docs": "/docs",
-        "endpoints": ["/health", "/query", "/rag-status", "/add-documents"]
+        "rag_system": "enabled",
+        "endpoints": {
+            "query": "/query",
+            "health": "/health", 
+            "rag_status": "/rag-status",
+            "secrets_check": "/secrets-check"
+        }
     }
 
 @app.get("/health")
 async def health_check():
+    """Health check básico de la API"""
     return {
         "status": "healthy",
         "service": "manual-mantenimiento-api",
-        "api_status": "operational"
+        "api_status": "operational",
+        "timestamp": "2025-01-20"
     }
 
 @app.get("/rag-status")
 async def rag_status():
-    """Estado del sistema RAG"""
-    return rag_system.health_check()
+    """Estado detallado del sistema RAG"""
+    health = rag_system.health_check()
+    
+    return {
+        "rag_system": health,
+        "ready_for_queries": health["overall_status"] in ["healthy", "partial"],
+        "mode": "full_rag" if health["overall_status"] == "healthy" else "mock_fallback"
+    }
+
+@app.get("/secrets-check")
+async def secrets_check():
+    """Verificar que los secrets están configurados"""
+    secrets = {
+        "QDRANT_URL": bool(os.getenv("QDRANT_URL")),
+        "QDRANT_API_KEY": bool(os.getenv("QDRANT_API_KEY")), 
+        "GROQ_API_KEY": bool(os.getenv("GROQ_API_KEY")),
+        "QDRANT_COLLECTION_NAME": bool(os.getenv("QDRANT_COLLECTION_NAME"))
+    }
+    
+    all_configured = all(secrets.values())
+    
+    return {
+        "secrets_configured": secrets,
+        "all_ready": all_configured,
+        "missing_secrets": [key for key, value in secrets.items() if not value],
+        "status": "ready" if all_configured else "incomplete",
+        "next_steps": [
+            "Configure missing secrets in Render Environment Variables",
+            "Redeploy the service",
+            "Upload manual using Kaggle"
+        ] if not all_configured else ["Upload manual to Qdrant using Kaggle"]
+    }
 
 @app.post("/query", response_model=QueryResponse)
 async def query_manual(request: QueryRequest):
@@ -89,23 +139,6 @@ async def query_manual(request: QueryRequest):
             detail=f"Error procesando consulta: {str(e)}"
         )
 
-@app.post("/add-documents")
-async def add_documents(request: DocumentRequest):
-    """Endpoint para agregar documentos al sistema RAG"""
-    try:
-        success = rag_system.add_documents(request.documents)
-        if success:
-            return {
-                "message": f"Agregados {len(request.documents)} documentos exitosamente",
-                "status": "success"
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Error agregando documentos")
-            
-    except Exception as e:
-        logger.error(f"Error agregando documentos: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/test-queries")
 async def test_queries():
     """Endpoint para probar consultas comunes"""
@@ -113,7 +146,9 @@ async def test_queries():
         "¿Cómo reparar aire acondicionado que gotea?",
         "¿Cómo arreglar grietas en la pared?", 
         "¿Cómo pintar paredes dañadas?",
-        "¿Qué mantenimiento necesita el sistema eléctrico?"
+        "¿Qué mantenimiento necesita el sistema eléctrico?",
+        "¿Cómo limpiar luminarias?",
+        "¿Qué hacer con registros obstruidos?"
     ]
     
     results = {}
@@ -121,9 +156,10 @@ async def test_queries():
         try:
             result = rag_system.query(query, "test_user")
             results[query] = {
-                "answer": result["answer"][:100] + "...",  # Solo primeros 100 chars
+                "answer_preview": result["answer"][:150] + "...",
                 "sources_count": len(result.get("sources", [])),
-                "status": "success"
+                "status": "success",
+                "mode": result.get("metadata", {}).get("system_status", "unknown")
             }
         except Exception as e:
             results[query] = {
@@ -131,18 +167,26 @@ async def test_queries():
                 "status": "error"
             }
     
-    return results
+    return {
+        "test_results": results,
+        "total_tests": len(test_cases),
+        "successful_tests": len([r for r in results.values() if r.get("status") == "success"])
+    }
 
 @app.get("/environment")
 async def get_environment():
-    """Ver configuración del entorno (sin exponer secrets)"""
+    """Ver configuración del entorno (SIN exponer secrets)"""
     return {
-        "qdrant_url_set": bool(os.getenv("QDRANT_URL")),
-        "qdrant_api_key_set": bool(os.getenv("QDRANT_API_KEY")),
-        "groq_api_key_set": bool(os.getenv("GROQ_API_KEY")),
+        "secrets_status": {
+            "qdrant_url_configured": bool(os.getenv("QDRANT_URL")),
+            "qdrant_api_key_configured": bool(os.getenv("QDRANT_API_KEY")),
+            "groq_api_key_configured": bool(os.getenv("GROQ_API_KEY")),
+        },
         "collection_name": os.getenv("QDRANT_COLLECTION_NAME", "manual_mantenimiento"),
-        "python_version": os.sys.version,
-        "environment": os.getenv("ENVIRONMENT", "production")
+        "python_version": sys.version.split()[0],
+        "environment": os.getenv("ENVIRONMENT", "production"),
+        "api_version": "1.0.0",
+        "rag_enabled": True
     }
 
 if __name__ == "__main__":
