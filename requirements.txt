@@ -1,9 +1,7 @@
 fastapi
 uvicorn[standard]
 python-multipart
-qdrant-client
+httpx
 groq
-sentence-transformers
 python-dotenv
 pydantic
-httpx
