@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class RemoteEmbeddingRAG:
     def __init__(self):
-        """RAG System usando embeddings remotos para Render free plan"""
+        """RAG System usando embeddings remotos con soporte para imágenes"""
         try:
             # Configuración desde variables de entorno
             self.qdrant_url = os.getenv("QDRANT_URL")
@@ -24,11 +24,12 @@ class RemoteEmbeddingRAG:
             self.qdrant_base_url = f"{self.qdrant_url.rstrip('/')}/collections/{self.collection_name}"
             
             # Log de configuración (sin exponer secrets)
-            logger.info("🚀 Inicializando Remote Embedding RAG System...")
+            logger.info("🚀 Inicializando Remote Embedding RAG System con soporte para imágenes...")
             logger.info(f"✅ QDRANT_URL configurada: {bool(self.qdrant_url)}")
             logger.info(f"✅ QDRANT_API_KEY configurada: {bool(self.qdrant_api_key)}")
             logger.info(f"✅ GROQ_API_KEY configurada: {bool(self.groq_api_key)}")
             logger.info(f"📦 Collection: {self.collection_name}")
+            logger.info("🖼️ Soporte para imágenes: Activado")
             
             # Validar configuración
             missing_vars = []
@@ -58,11 +59,6 @@ class RemoteEmbeddingRAG:
             
             # Usar HuggingFace Inference API - mismo modelo que usábamos localmente
             url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
-            
-            headers = {
-                "Authorization": "Bearer hf_YOUR_TOKEN_HERE",  # Token gratuito de HuggingFace
-                "Content-Type": "application/json"
-            }
             
             # Si no tienes token, usa sin autorización (limitado pero funciona)
             headers = {"Content-Type": "application/json"}
@@ -150,10 +146,18 @@ class RemoteEmbeddingRAG:
                             'page': payload.get('page', 0),
                             'section': payload.get('section', ''),
                             'title': payload.get('title', ''),
-                            'score': hit.get('score', 0.0)
+                            'score': hit.get('score', 0.0),
+                            'has_images': payload.get('has_images', False),
+                            'image_count': payload.get('image_count', 0),
+                            'images': payload.get('images', [])  # URLs e info de imágenes
                         })
                     
                     logger.info(f"✅ Encontrados {len(results)} chunks relevantes")
+                    # Log de imágenes encontradas
+                    total_images = sum(len(r.get('images', [])) for r in results)
+                    if total_images > 0:
+                        logger.info(f"🖼️ Total imágenes relevantes: {total_images}")
+                    
                     return results
                     
                 elif response.status_code == 404:
@@ -171,7 +175,7 @@ class RemoteEmbeddingRAG:
         """Respuestas mock del manual cuando Qdrant no está disponible"""
         query_lower = query.lower() if query else ""
         
-        # Base de respuestas del manual real
+        # Base de respuestas del manual real con imágenes mock
         if "aire acondicionado" in query_lower or "gotea" in query_lower or "ac" in query_lower:
             return [{
                 'content': """AIRE ACONDICIONADO: Gotea la unidad interior
@@ -181,11 +185,23 @@ SOLUCIÓN:
 2. Si el problema no está allí, introducir una cinta pasacable a través de la manguera hasta lograr desobstruirla
 3. En algún punto de este proceso debería comenzar a salir agua por la manguera
 
-CAUSA: Obstrucciones en el sistema de drenaje del condensado""",
+CAUSA: Obstrucciones en el sistema de drenaje del condensado
+
+IMAGENES EN ESTA PÁGINA:
+- Imagen 1: Ilustración de procedimiento: Reparación de aire acondicionado (URL: https://via.placeholder.com/600x400/0066cc/ffffff?text=Aire+Acondicionado)""",
                 'page': 43,
                 'section': 'G',
                 'title': 'Reparaciones Rápidas - Aire Acondicionado',
-                'score': 0.95
+                'score': 0.95,
+                'has_images': True,
+                'image_count': 1,
+                'images': [{
+                    'image_url': 'https://via.placeholder.com/600x400/0066cc/ffffff?text=Aire+Acondicionado+Goteo',
+                    'filename': 'manual_p43_aire_acondicionado',
+                    'width': 600,
+                    'height': 400,
+                    'description': 'Ilustración de procedimiento: Reparación de aire acondicionado que gotea'
+                }]
             }]
         
         elif "pintura" in query_lower or "pared" in query_lower or "marcas" in query_lower:
@@ -197,11 +213,23 @@ PROCEDIMIENTO:
 2. Restaurar rayones y marcas con masilla o enduido
 3. Lijar dejando la superficie alisada y uniforme
 4. Eliminar todo el polvo y aplicar fijador/sellador
-5. Dependiendo del tamaño de la superficie a cubrir, pintar con pincel o rodillo""",
+5. Dependiendo del tamaño de la superficie a cubrir, pintar con pincel o rodillo
+
+IMAGENES EN ESTA PÁGINA:
+- Imagen 1: Proceso de reparación de pintura paso a paso (URL: https://via.placeholder.com/600x400/cc6600/ffffff?text=Reparacion+Pintura)""",
                 'page': 42,
                 'section': 'E',
                 'title': 'Reparaciones Rápidas - Pintura',
-                'score': 0.92
+                'score': 0.92,
+                'has_images': True,
+                'image_count': 1,
+                'images': [{
+                    'image_url': 'https://via.placeholder.com/600x400/cc6600/ffffff?text=Reparacion+Pintura',
+                    'filename': 'manual_p42_pintura_reparacion',
+                    'width': 600,
+                    'height': 400,
+                    'description': 'Proceso de reparación de pintura paso a paso'
+                }]
             }]
         
         elif "grieta" in query_lower or "rajadura" in query_lower or "fisura" in query_lower:
@@ -214,47 +242,54 @@ Para grietas pequeñas y fisuras que sólo afecten los revoques o la pintura:
 3. Rellenar la grieta con un material apropiado para el lugar (masilla plástica interior o exterior)
 4. Dejar secar y lijar con un taco de lija hasta nivelar la pared
 
-IMPORTANTE: Si se observa que las grietas son más profundas y afectan la estructura, comunicarse con el formador de mantenimiento.""",
+IMPORTANTE: Si se observa que las grietas son más profundas y afectan la estructura, comunicarse con el formador de mantenimiento.
+
+IMAGENES EN ESTA PÁGINA:
+- Imagen 1: Técnica de reparación de grietas en muros (URL: https://via.placeholder.com/600x400/cc0066/ffffff?text=Reparacion+Grietas)""",
                 'page': 40,
                 'section': 'B',
                 'title': 'Reparaciones Rápidas - Grietas',
-                'score': 0.89
+                'score': 0.89,
+                'has_images': True,
+                'image_count': 1,
+                'images': [{
+                    'image_url': 'https://via.placeholder.com/600x400/cc0066/ffffff?text=Reparacion+Grietas',
+                    'filename': 'manual_p40_grietas_reparacion',
+                    'width': 600,
+                    'height': 400,
+                    'description': 'Técnica de reparación de grietas en muros'
+                }]
             }]
         
-        elif "registro" in query_lower or "obstruido" in query_lower or "pileta" in query_lower:
+        elif "epp" in query_lower or "protección" in query_lower or "seguridad" in query_lower:
             return [{
-                'content': """REGISTROS OBSTRUIDOS (Piletas de patio, cámaras de inspección)
+                'content': """EQUIPO DE PROTECCIÓN PERSONAL (EPP)
 
-PROCEDIMIENTO:
-1. Desatornillar la rejilla para poder retirarla
-2. Limpiar el interior del registro con la mano, sacando toda la suciedad
-3. Verificar que los caños de entrada y salida a la cámara estén libres de obstrucciones
-4. Si tiene un sifón removible, quitarlo para su limpieza
-5. Limpiar la tapa del registro y repasar todo el piso
-6. Volver a colocar la rejilla. Reemplazar los tornillos que estén en mal estado""",
-                'page': 43,
-                'section': 'H',
-                'title': 'Reparaciones Rápidas - Registros',
-                'score': 0.87
-            }]
-        
-        elif "luminaria" in query_lower or "luz" in query_lower or "lampara" in query_lower:
-            return [{
-                'content': """LUMINARIAS: Lámparas interiores y exteriores
+El objetivo es lograr un entorno de trabajo sin accidentes. Usar siempre el EPP:
 
-MANTENIMIENTO:
-1. Desconectar la energía de todo el circuito eléctrico
-2. Utilizar señalización de advertencia y realizar correcto bloqueo y etiquetado
-3. Revisar la apariencia general de la luminaria, buscando signos de falla o recalentamiento
-4. Comprobar que no se encuentren amarillentas y que estén libres de polvo, insectos, herrumbre o rajaduras
-5. Revisar que las conexiones sean seguras
-6. Examinar que las sujeciones y anclajes estén en buenas condiciones
+- Casco y gafas de protección
+- Protector facial y auditivo
+- Guantes de trabajo
+- Chaleco reflectivo
+- Arnés y faja lumbar
+- Mameluco y calzado de seguridad
+- Barbijo
 
-Un correcto mantenimiento preventivo incluye la limpieza periódica de todos sus componentes.""",
-                'page': 29,
-                'section': 'B',
-                'title': 'Sistemas Eléctricos - Luminarias',
-                'score': 0.85
+IMAGENES EN ESTA PÁGINA:
+- Imagen 1: Diagrama de Equipo de Protección Personal (EPP) (URL: https://via.placeholder.com/800x600/006600/ffffff?text=EPP+Completo)""",
+                'page': 5,
+                'section': 'introducción',
+                'title': 'Introducción - Seguridad Personal',
+                'score': 0.94,
+                'has_images': True,
+                'image_count': 1,
+                'images': [{
+                    'image_url': 'https://via.placeholder.com/800x600/006600/ffffff?text=EPP+Completo',
+                    'filename': 'manual_p5_epp_diagrama',
+                    'width': 800,
+                    'height': 600,
+                    'description': 'Diagrama técnico detallado: Equipo de Protección Personal (EPP)'
+                }]
             }]
         
         else:
@@ -270,41 +305,63 @@ Este manual contiene información completa sobre:
 • Sistemas mecánicos (climatización, dispensadores, agua)
 • Reparaciones rápidas (óxido, grietas, pintura, selladores)
 
-Para consultas específicas, pregunta sobre temas como: aire acondicionado, pintura, grietas, registros obstruidos, luminarias, sistemas eléctricos, etc.""",
+Para consultas específicas, pregunta sobre temas como: aire acondicionado, pintura, grietas, registros obstruidos, luminarias, sistemas eléctricos, EPP, etc.""",
                 'page': 1,
                 'section': 'Introducción',
                 'title': 'Manual de Mantenimiento',
-                'score': 0.7
+                'score': 0.7,
+                'has_images': False,
+                'image_count': 0,
+                'images': []
             }]
     
-    async def generate_answer_with_groq(self, query: str, context_chunks: List[Dict[str, Any]]) -> str:
-        """Generar respuesta usando Groq LLM"""
+    async def generate_answer_with_groq(self, query: str, context_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generar respuesta usando Groq LLM incluyendo información de imágenes"""
         try:
             if not self.groq_api_key or not context_chunks:
-                return self._format_mock_answer(context_chunks[0] if context_chunks else {})
+                return self._format_mock_answer_with_images(context_chunks[0] if context_chunks else {})
             
-            # Preparar contexto del manual
-            context = "\n\n".join([
-                f"**{chunk['title']} (Página {chunk['page']})**\n{chunk['content']}"
-                for chunk in context_chunks
-            ])
+            # Preparar contexto incluyendo imágenes
+            context_parts = []
+            relevant_images = []
             
-            # Prompt optimizado para mantenimiento
+            for chunk in context_chunks:
+                context_parts.append(f"**{chunk['title']} (Página {chunk['page']})**\n{chunk['content']}")
+                
+                # Recopilar imágenes relevantes
+                if chunk.get('images'):
+                    for img in chunk['images']:
+                        relevant_images.append({
+                            'url': img['image_url'],
+                            'description': img['description'],
+                            'page': chunk['page'],
+                            'filename': img.get('filename', ''),
+                            'width': img.get('width', 0),
+                            'height': img.get('height', 0)
+                        })
+            
+            context = "\n\n".join(context_parts)
+            
+            # Indicar si hay material visual disponible
+            has_images = len(relevant_images) > 0
+            image_note = f"\n\n📸 MATERIAL VISUAL DISPONIBLE: {len(relevant_images)} imagen(es) técnica(s)" if has_images else ""
+            
+            # Prompt optimizado para incluir referencias a imágenes
             prompt = f"""Eres un asistente experto en mantenimiento de Salones del Reino. 
 Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manual proporcionado.
 
 **CONTEXTO DEL MANUAL:**
-{context}
+{context}{image_note}
 
 **PREGUNTA DEL USUARIO:**
 {query}
 
 **INSTRUCCIONES:**
 - Responde en español con información práctica y específica del manual
-- Usa emojis relevantes (🔧⚡🏠💡🚰) para hacer la respuesta más clara
+- Usa emojis relevantes (🔧⚡🏠💡🚰🖼️) para hacer la respuesta más clara
 - Si hay pasos específicos, númeralos claramente
 - Si hay advertencias importantes, márcalas como ⚠️ IMPORTANTE
-- Si necesitas herramientas específicas, mencionálas
+- Si hay material visual disponible, menciona que existen imágenes técnicas para complementar la explicación
 - Mantén un tono profesional pero amigable
 - Si no tienes información suficiente en el contexto, dilo claramente
 
@@ -320,7 +377,7 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
                 "messages": [
                     {
                         "role": "system", 
-                        "content": "Eres un experto en mantenimiento de edificios religiosos, especializado en Salones del Reino. Siempre basas tus respuestas en el manual oficial."
+                        "content": "Eres un experto en mantenimiento de edificios religiosos, especializado en Salones del Reino. Siempre basas tus respuestas en el manual oficial e incluyes referencias a material visual cuando está disponible."
                     },
                     {
                         "role": "user", 
@@ -343,34 +400,51 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
                     result = response.json()
                     answer = result["choices"][0]["message"]["content"]
                     logger.info("✅ Respuesta generada con Groq")
-                    return answer
+                    
+                    # Retornar respuesta con imágenes
+                    return {
+                        "text": answer,
+                        "images": relevant_images
+                    }
                 else:
                     logger.error(f"❌ Error Groq: {response.status_code}")
-                    return self._format_mock_answer(context_chunks[0])
+                    return self._format_mock_answer_with_images(context_chunks[0])
                     
         except Exception as e:
             logger.error(f"❌ Error generando respuesta: {str(e)}")
-            return self._format_mock_answer(context_chunks[0] if context_chunks else {})
+            return self._format_mock_answer_with_images(context_chunks[0] if context_chunks else {})
     
-    def _format_mock_answer(self, chunk: Dict[str, Any]) -> str:
-        """Formatear respuesta mock cuando Groq no está disponible"""
+    def _format_mock_answer_with_images(self, chunk: Dict[str, Any]) -> Dict[str, Any]:
+        """Formatear respuesta mock incluyendo imágenes"""
         if not chunk:
-            return "❌ No encontré información específica sobre tu consulta en el manual."
+            return {
+                "text": "❌ No encontré información específica sobre tu consulta en el manual.",
+                "images": []
+            }
         
         content = chunk.get('content', 'Información no disponible')
         page = chunk.get('page', 0)
         title = chunk.get('title', 'Manual de Mantenimiento')
+        images = chunk.get('images', [])
         
-        return f"""🔧 **{title}** (Página {page})
+        # Agregar nota sobre imágenes si están disponibles
+        image_note = f"\n\n🖼️ *{len(images)} imagen(es) técnica(s) disponible(s)*" if images else ""
+        
+        text_response = f"""🔧 **{title}** (Página {page})
 
-{content}
+{content}{image_note}
 
 ---
 💡 *Respuesta del Manual de Mantenimiento de Salones del Reino*
 ⚠️ *Para consultas complejas, contacta al formador de mantenimiento*"""
+
+        return {
+            "text": text_response,
+            "images": images
+        }
     
     async def query(self, user_query: str, user_id: str = "default") -> Dict[str, Any]:
-        """Método principal para procesar consultas con embeddings remotos"""
+        """Método principal para procesar consultas con soporte para imágenes"""
         try:
             logger.info(f"🔍 Procesando consulta: {user_query[:50]}... (usuario: {user_id})")
             
@@ -380,8 +454,8 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
             # 2. Buscar chunks relevantes en Qdrant
             relevant_chunks = await self.search_qdrant_vectors(query_embedding, limit=3)
             
-            # 3. Generar respuesta con Groq
-            answer = await self.generate_answer_with_groq(user_query, relevant_chunks)
+            # 3. Generar respuesta con imágenes usando Groq
+            answer_data = await self.generate_answer_with_groq(user_query, relevant_chunks)
             
             # 4. Preparar sources
             sources = []
@@ -389,18 +463,28 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
                 source = f"Manual - Página {chunk['page']}: {chunk['title']}"
                 if chunk.get('score', 0) > 0:
                     source += f" (relevancia: {chunk['score']:.2f})"
+                if chunk.get('has_images'):
+                    source += f" [📸 {chunk.get('image_count', 0)} imagen(es)]"
                 sources.append(source)
             
+            # 5. Contar estadísticas de imágenes
+            total_images = len(answer_data["images"])
+            if total_images > 0:
+                logger.info(f"🖼️ Respuesta incluye {total_images} imagen(es)")
+            
             return {
-                "answer": answer,
+                "answer": answer_data["text"],
+                "images": answer_data["images"],  # URLs de imágenes relevantes
                 "sources": sources,
                 "metadata": {
                     "query": user_query,
                     "user_id": user_id,
                     "chunks_found": len(relevant_chunks),
-                    "system_status": "remote_embeddings_operational" if self.operational else "limited_mock",
+                    "images_found": total_images,
+                    "system_status": "remote_embeddings_with_images" if self.operational else "limited_mock",
                     "embedding_method": "huggingface_remote",
-                    "search_method": "qdrant_vector_search"
+                    "search_method": "qdrant_vector_search",
+                    "features": ["text_search", "image_support", "remote_embeddings"]
                 }
             }
             
@@ -408,6 +492,7 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
             logger.error(f"❌ Error en consulta: {str(e)}")
             return {
                 "answer": f"❌ Error procesando consulta: {str(e)}",
+                "images": [],
                 "sources": [],
                 "metadata": {
                     "error": str(e), 
@@ -422,8 +507,16 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
             "qdrant_configured": bool(self.qdrant_url and self.qdrant_api_key),
             "groq_configured": bool(self.groq_api_key),
             "embedding_method": "huggingface_remote",
+            "image_support": True,
             "operational": self.operational,
-            "overall_status": "healthy" if self.operational else "limited"
+            "overall_status": "healthy" if self.operational else "limited",
+            "features": {
+                "vector_search": True,
+                "remote_embeddings": True,
+                "image_extraction": True,
+                "image_serving": True,
+                "groq_llm": True
+            }
         }
         
         return status
