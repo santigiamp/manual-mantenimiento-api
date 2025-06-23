@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import Dict, Any, List
 import logging
 
-# Importar nuestro sistema RAG con embeddings remotos
+# Importar nuestro sistema RAG con embeddings remotos y soporte de imágenes
 from rag_system import RemoteEmbeddingRAG
 
 # Configurar logging
@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Manual Mantenimiento API",
-    description="API RAG para consultas del Manual de Mantenimiento de Salones del Reino",
-    version="2.0.0-remote-embeddings"
+    description="API RAG para consultas del Manual de Mantenimiento de Salones del Reino con soporte para imágenes",
+    version="2.1.0-remote-embeddings-with-images"
 )
 
 # CORS
@@ -28,17 +28,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicializar sistema RAG con embeddings remotos
-logger.info("🚀 Inicializando API con Remote Embeddings...")
+# Inicializar sistema RAG con embeddings remotos e imágenes
+logger.info("🚀 Inicializando API con Remote Embeddings e imágenes...")
 rag_system = RemoteEmbeddingRAG()
 
-# Modelos de datos
+# Modelos de datos actualizados para incluir imágenes
 class QueryRequest(BaseModel):
     query: str
     user_id: str = "default"
 
+class ImageInfo(BaseModel):
+    url: str
+    description: str
+    page: int
+    filename: str = ""
+    width: int = 0
+    height: int = 0
+
 class QueryResponse(BaseModel):
     answer: str
+    images: List[ImageInfo] = []  # NUEVO: Lista de imágenes relevantes
     sources: List[str] = []
     metadata: Dict[str, Any] = {}
 
@@ -48,6 +57,8 @@ async def startup_event():
     logger.info("✅ Manual Mantenimiento API iniciada exitosamente")
     logger.info("🧠 Usando embeddings remotos (HuggingFace)")
     logger.info("🔍 Búsqueda vectorial completa en Qdrant")
+    logger.info("🖼️ Soporte para imágenes activado")
+    logger.info("🖼️ Soporte para imágenes activado")
     
     # Verificar estado del RAG
     health = rag_system.health_check()
@@ -61,12 +72,13 @@ async def root():
     return {
         "message": "Manual Mantenimiento API",
         "status": "running",
-        "version": "2.0.0-remote-embeddings",
+        "version": "2.1.0-remote-embeddings-with-images",
         "docs": "/docs",
         "features": {
             "vector_search": True,
             "remote_embeddings": True,
             "groq_llm": True,
+            "image_support": True,  # NUEVO
             "render_free_compatible": True
         },
         "endpoints": {
@@ -74,8 +86,15 @@ async def root():
             "health": "/health", 
             "rag_status": "/rag-status",
             "test_queries": "/test-queries",
-            "secrets_check": "/secrets-check"
-        }
+            "secrets_check": "/secrets-check",
+            "system_info": "/system-info"
+        },
+        "new_in_v2_1": [
+            "🖼️ Extracción de imágenes del manual PDF",
+            "🔗 URLs de imágenes en respuestas",
+            "📸 Referencias visuales automáticas",
+            "🎯 Respuestas más completas con material gráfico"
+        ]
     }
 
 @app.get("/health")
@@ -86,6 +105,7 @@ async def health_check():
         "service": "manual-mantenimiento-api",
         "api_status": "operational",
         "embedding_method": "remote_huggingface",
+        "image_support": True,
         "memory_optimized": True
     }
 
@@ -100,160 +120,346 @@ async def rag_status():
         "embedding_provider": "HuggingFace Inference API",
         "vector_database": "Qdrant Cloud",
         "llm_provider": "Groq",
-        "mode": "remote_embeddings_full_rag" if health["operational"] else "mock_fallback",
+        "image_storage": "ImgBB (via Kaggle upload)",
+        "mode": "remote_embeddings_full_rag_with_images" if health["operational"] else "mock_fallback",
         "advantages": [
             "✅ Búsqueda vectorial completa",
             "✅ Compatible con Render free plan", 
-            "✅ Sin dependencias pesadas locales",
-            "✅ Embeddings de calidad profesional"
-        ]
-    }
-
-@app.get("/secrets-check")
-async def secrets_check():
-    """Verificar que los secrets están configurados"""
-    secrets = {
-        "QDRANT_URL": bool(os.getenv("QDRANT_URL")),
-        "QDRANT_API_KEY": bool(os.getenv("QDRANT_API_KEY")), 
-        "GROQ_API_KEY": bool(os.getenv("GROQ_API_KEY")),
-        "QDRANT_COLLECTION_NAME": bool(os.getenv("QDRANT_COLLECTION_NAME"))
-    }
-    
-    all_configured = all(secrets.values())
-    
-    return {
-        "secrets_configured": secrets,
-        "all_ready": all_configured,
-        "missing_secrets": [key for key, value in secrets.items() if not value],
-        "status": "ready" if all_configured else "incomplete",
-        "next_steps": [
-            "1. Configure missing secrets in Render Environment Variables",
-            "2. Redeploy the service",
-            "3. Upload manual using Kaggle",
-            "4. Test vector search functionality"
-        ] if not all_configured else [
-            "✅ All secrets configured",
-            "🔄 Upload manual to Qdrant using Kaggle",
-            "🧪 Test queries to verify functionality"
+            "✅ Sin dependencias locales pesadas",
+            "✅ Embeddings remotos eficientes",
+            "✅ Soporte completo de imágenes"
         ]
     }
 
 @app.post("/query", response_model=QueryResponse)
 async def query_manual(request: QueryRequest):
-    """Endpoint principal para consultas al manual con búsqueda vectorial"""
+    """
+    Endpoint principal para consultas del manual con soporte de imágenes
+    """
     try:
-        logger.info(f"🔍 Nueva consulta: {request.query[:50]}... (usuario: {request.user_id})")
+        logger.info(f"📝 Nueva consulta de {request.user_id}: {request.query[:100]}...")
         
-        # Procesar consulta con el sistema RAG de embeddings remotos
-        result = await rag_system.query(request.query, request.user_id)
-        
-        return QueryResponse(
-            answer=result["answer"],
-            sources=result.get("sources", []),
-            metadata=result.get("metadata", {})
+        # Procesar consulta con el sistema RAG
+        result = rag_system.query(
+            query=request.query,
+            user_id=request.user_id,
+            include_images=True  # NUEVO: Incluir imágenes en la respuesta
         )
+        
+        # Construir respuesta con imágenes
+        response = QueryResponse(
+            answer=result.get("answer", "Lo siento, no pude procesar tu consulta."),
+            images=result.get("images", []),  # NUEVO: Lista de imágenes relevantes
+            sources=result.get("sources", []),
+            metadata={
+                "query_processed": True,
+                "embedding_method": "remote_huggingface",
+                "search_method": "qdrant_vector_search",
+                "image_support": True,
+                "user_id": request.user_id,
+                "response_time": result.get("response_time", 0),
+                "chunks_found": len(result.get("sources", [])),
+                "images_found": len(result.get("images", [])),  # NUEVO
+                "confidence_score": result.get("confidence_score", 0.0)
+            }
+        )
+        
+        logger.info(f"✅ Respuesta generada: {len(response.answer)} chars, {len(response.images)} imágenes")
+        return response
         
     except Exception as e:
         logger.error(f"❌ Error procesando consulta: {str(e)}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail=f"Error procesando consulta: {str(e)}"
         )
 
 @app.get("/test-queries")
-async def test_queries():
-    """Endpoint para probar consultas comunes con búsqueda vectorial"""
-    test_cases = [
-        "¿Cómo reparar aire acondicionado que gotea?",
-        "¿Cómo arreglar grietas en la pared?", 
-        "¿Cómo pintar paredes dañadas?",
-        "¿Cómo desobstruir registros de agua?",
-        "¿Qué mantenimiento necesitan las luminarias?",
-        "¿Qué hacer con óxido en elementos metálicos?",
-        "¿Cómo inspeccionar el sistema eléctrico?"
-    ]
-    
-    results = {}
-    for query in test_cases:
-        try:
-            result = await rag_system.query(query, "test_user")
-            results[query] = {
-                "answer_preview": result["answer"][:150] + "...",
-                "sources_count": len(result.get("sources", [])),
-                "status": "success",
-                "search_method": result.get("metadata", {}).get("search_method", "unknown"),
-                "system_status": result.get("metadata", {}).get("system_status", "unknown")
-            }
-        except Exception as e:
-            results[query] = {
-                "error": str(e),
-                "status": "error"
-            }
-    
-    successful_tests = len([r for r in results.values() if r.get("status") == "success"])
-    
+async def get_test_queries():
+    """Consultas de prueba específicas del Manual de Mantenimiento"""
     return {
-        "test_results": results,
-        "summary": {
-            "total_tests": len(test_cases),
-            "successful_tests": successful_tests,
-            "success_rate": f"{(successful_tests/len(test_cases)*100):.1f}%"
-        },
-        "embedding_method": "remote_huggingface",
-        "vector_search": "qdrant_cloud"
+        "test_queries": [
+            {
+                "category": "🔧 Equipos",
+                "queries": [
+                    "¿Cómo mantener las aspiradoras?",
+                    "¿Qué hacer si una escalera está dañada?",
+                    "¿Cómo revisar herramientas eléctricas?",
+                    "Mantenimiento de máquinas y herramientas"
+                ]
+            },
+            {
+                "category": "🏢 Edificios - Sistema de Emergencia",
+                "queries": [
+                    "¿Cómo revisar los extintores?",
+                    "¿Cada cuánto probar la iluminación de emergencia?",
+                    "¿Qué hacer si las salidas de escape están bloqueadas?",
+                    "Mantenimiento de señalización de escape"
+                ]
+            },
+            {
+                "category": "🏗️ Inspecciones Estructurales",
+                "queries": [
+                    "¿Cómo inspeccionar columnas y vigas?",
+                    "¿Qué buscar en muros de ladrillo?",
+                    "¿Cómo revisar el techo después de una tormenta?",
+                    "Inspección luego de un desastre natural"
+                ]
+            },
+            {
+                "category": "⚡ Sistemas Eléctricos",
+                "queries": [
+                    "¿Cómo revisar el tablero eléctrico?",
+                    "¿Qué hacer si una lámpara no funciona?",
+                    "¿Cómo mantener la puesta a tierra?",
+                    "Mantenimiento de luminarias LED"
+                ]
+            },
+            {
+                "category": "🎵 Audio y Video",
+                "queries": [
+                    "¿Cómo limpiar los equipos de audio?",
+                    "¿Qué hacer si el micrófono no funciona?",
+                    "¿Cómo mantener el proyector?",
+                    "Problemas con el sistema de sonido"
+                ]
+            },
+            {
+                "category": "❄️ Climatización",
+                "queries": [
+                    "¿Por qué gotea el aire acondicionado?",
+                    "¿Cómo limpiar los filtros del AC?",
+                    "¿Qué hacer si el ventilador hace ruido?",
+                    "Mantenimiento de calefactores"
+                ]
+            },
+            {
+                "category": "🚰 Sistema Hidráulico",
+                "queries": [
+                    "¿Cómo reparar una canilla que gotea?",
+                    "¿Qué hacer si el inodoro está obstruido?",
+                    "¿Cómo mantener las cañerías?",
+                    "Problemas con la presión del agua"
+                ]
+            },
+            {
+                "category": "🛠️ Reparaciones Rápidas",
+                "queries": [
+                    "¿Cómo quitar óxido de elementos metálicos?",
+                    "¿Cómo reparar grietas en paredes?",
+                    "¿Qué hacer si se descascara la pintura?",
+                    "¿Cómo nivelar un cielorraso que se pandeó?"
+                ]
+            },
+            {
+                "category": "🌱 Jardines y Exterior",
+                "queries": [
+                    "¿Cómo mantener el césped del salón?",
+                    "¿Qué EPP usar para jardinería?",
+                    "¿Cómo controlar plagas en el edificio?",
+                    "Mantenimiento de canteros y plantas"
+                ]
+            },
+            {
+                "category": "🔒 Seguridad",
+                "queries": [
+                    "¿Qué EPP usar para trabajar en altura?",
+                    "¿Cómo trabajar seguro con electricidad?",
+                    "¿Cuándo usar el formulario DC-85?",
+                    "Normas de seguridad para mantenimiento"
+                ]
+            }
+        ],
+        "usage_tips": [
+            "💡 Prueba preguntas específicas como '¿Cómo reparar goteo de aire acondicionado?'",
+            "📋 Las respuestas incluyen pasos detallados del manual",
+            "🖼️ Algunas respuestas incluyen imágenes de referencia",
+            "📖 Se citan las páginas y secciones del manual",
+            "⚠️ Se incluyen advertencias de seguridad cuando aplican"
+        ]
     }
 
-@app.get("/environment")
-async def get_environment():
-    """Ver configuración del entorno (SIN exponer secrets)"""
+@app.get("/secrets-check")
+async def check_secrets():
+    """Verificar que las variables de entorno estén configuradas"""
+    secrets_status = {}
+    
+    # Variables críticas para el funcionamiento
+    critical_secrets = {
+        "QDRANT_URL": "Qdrant Cloud URL",
+        "QDRANT_API_KEY": "Qdrant API Key", 
+        "GROQ_API_KEY": "Groq LLM API Key",
+        "HUGGINGFACE_API_KEY": "HuggingFace Embeddings API Key"
+    }
+    
+    # Variables opcionales para funcionalidades extra
+    optional_secrets = {
+        "IMGBB_API_KEY": "ImgBB para imágenes (opcional)",
+        "SENTRY_DSN": "Sentry para logging (opcional)"
+    }
+    
+    all_good = True
+    
+    # Verificar secretos críticos
+    for key, description in critical_secrets.items():
+        value = os.getenv(key)
+        if value:
+            secrets_status[key] = {
+                "status": "✅ Configurado",
+                "description": description,
+                "length": len(value),
+                "preview": f"{value[:8]}..." if len(value) > 8 else "***"
+            }
+        else:
+            secrets_status[key] = {
+                "status": "❌ Faltante",
+                "description": description,
+                "required": True
+            }
+            all_good = False
+    
+    # Verificar secretos opcionales
+    for key, description in optional_secrets.items():
+        value = os.getenv(key)
+        if value:
+            secrets_status[key] = {
+                "status": "✅ Configurado",
+                "description": description,
+                "required": False
+            }
+        else:
+            secrets_status[key] = {
+                "status": "⚪ No configurado (opcional)",
+                "description": description,
+                "required": False
+            }
+    
     return {
-        "secrets_status": {
-            "qdrant_url_configured": bool(os.getenv("QDRANT_URL")),
-            "qdrant_api_key_configured": bool(os.getenv("QDRANT_API_KEY")),
-            "groq_api_key_configured": bool(os.getenv("GROQ_API_KEY")),
-        },
-        "collection_name": os.getenv("QDRANT_COLLECTION_NAME", "manual_mantenimiento"),
-        "python_version": sys.version.split()[0],
-        "environment": os.getenv("ENVIRONMENT", "production"),
-        "api_version": "2.0.0-remote-embeddings",
-        "features": {
-            "rag_enabled": True,
-            "embedding_method": "remote_huggingface",
-            "vector_search": "qdrant_cloud",
-            "llm_provider": "groq",
-            "memory_optimized": True
-        }
+        "overall_status": "✅ Todos los secretos críticos configurados" if all_good else "❌ Faltan secretos críticos",
+        "ready_for_production": all_good,
+        "secrets": secrets_status,
+        "next_steps": [
+            "1. Configura las variables faltantes en Railway/Render",
+            "2. Procesa el manual PDF en Kaggle",
+            "3. Carga los embeddings a Qdrant Cloud",
+            "4. Testea las consultas con /test-queries"
+        ] if not all_good else [
+            "🎉 ¡Todo configurado correctamente!",
+            "🔄 Procesa el manual en Kaggle si aún no lo hiciste",
+            "🧪 Usa /test-queries para probar el sistema"
+        ]
     }
 
 @app.get("/system-info")
-async def system_info():
-    """Información técnica del sistema"""
+async def get_system_info():
+    """Información detallada del sistema"""
+    import platform
+    import psutil
+    
     return {
-        "architecture": {
-            "embeddings": "HuggingFace Inference API (remote)",
-            "vector_database": "Qdrant Cloud",
-            "llm": "Groq (Llama 3.1 70B)",
-            "api_framework": "FastAPI",
-            "deployment": "Render (free plan compatible)"
+        "system": {
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+            "architecture": platform.architecture()[0],
+            "processor": platform.processor() or "Unknown"
         },
-        "workflow": [
-            "1. 👤 Usuario envía consulta",
-            "2. 🔢 HuggingFace genera embedding remoto",
-            "3. 🔍 Qdrant busca vectores similares",
-            "4. 📋 Obtiene chunks relevantes del manual",
-            "5. 🤖 Groq genera respuesta contextual",
-            "6. ✅ Usuario recibe respuesta del manual"
-        ],
-        "benefits": [
-            "✅ Búsqueda vectorial semántica completa",
-            "✅ Compatible con planes gratuitos",
-            "✅ Sin limitaciones de memoria local",
-            "✅ Respuestas basadas en manual oficial",
-            "✅ Escalable y mantenible"
-        ]
+        "memory": {
+            "total_mb": round(psutil.virtual_memory().total / 1024 / 1024, 2),
+            "available_mb": round(psutil.virtual_memory().available / 1024 / 1024, 2),
+            "usage_percent": psutil.virtual_memory().percent
+        },
+        "api_info": {
+            "version": "2.1.0-remote-embeddings-with-images",
+            "embedding_method": "remote_huggingface",
+            "vector_db": "qdrant_cloud",
+            "llm_provider": "groq",
+            "image_support": True,
+            "memory_optimized": True
+        },
+        "manual_info": {
+            "title": "Manual de Mantenimiento - Salones del Reino",
+            "pages": 44,
+            "sections": [
+                "01 - Introducción",
+                "02 - Equipos", 
+                "03 - Edificios",
+                "04 - Sistemas Eléctricos",
+                "05 - Sistemas Electrónicos", 
+                "06 - Sistemas Mecánicos",
+                "Anexo - Reparaciones Rápidas"
+            ],
+            "specialization": "Mantenimiento de infraestructura religiosa"
+        },
+        "deployment": {
+            "platform": "Railway/Render compatible",
+            "free_tier_optimized": True,
+            "external_dependencies": [
+                "Qdrant Cloud (vector DB)",
+                "HuggingFace API (embeddings)",
+                "Groq API (LLM)",
+                "ImgBB (image storage)"
+            ]
+        }
+    }
+
+# Endpoint adicional para manejo de imágenes
+@app.get("/images/{page_number}")
+async def get_page_images(page_number: int):
+    """Obtener imágenes de una página específica del manual"""
+    try:
+        images = rag_system.get_images_by_page(page_number)
+        
+        return {
+            "page": page_number,
+            "images_count": len(images),
+            "images": images,
+            "manual_section": rag_system.get_section_by_page(page_number)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo imágenes de página {page_number}: {str(e)}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"No se encontraron imágenes para la página {page_number}"
+        )
+
+@app.get("/search-images")
+async def search_images(query: str):
+    """Buscar imágenes relacionadas con una consulta"""
+    try:
+        images = rag_system.search_related_images(query)
+        
+        return {
+            "query": query,
+            "images_found": len(images),
+            "images": images
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error buscando imágenes para '{query}': {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error buscando imágenes: {str(e)}"
+        )
+
+# Manejo de errores global
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error(f"❌ Error no manejado: {str(exc)}")
+    return {
+        "error": "Error interno del servidor",
+        "detail": str(exc),
+        "status_code": 500
     }
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False,  # Desactivado para producción
+        log_level="info"
+    )
