@@ -1,19 +1,13 @@
 services:
   - type: web
-    name: manual-mantenimiento-api
+    name: manual-rag-api
     env: python
     plan: free
-    runtime: python-3.11.0
-    buildCommand: pip install --no-cache-dir -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
-      - key: QDRANT_URL
-        sync: false
-      - key: QDRANT_API_KEY
-        sync: false
-      - key: QDRANT_COLLECTION_NAME
-        value: manual_mantenimiento
-      - key: GROQ_API_KEY
-        sync: false
-      - key: PYTHONPATH
-        value: /opt/render/project/src
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: PORT
+        generateValue: true
