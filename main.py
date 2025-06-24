@@ -213,40 +213,36 @@ def search_similar_chunks(query: str, section_filter: str = None, limit: int = 5
 # REEMPLAZAR generate_answer_groq() CON ESTA FUNCIÓN EN main.py
 
 def generate_answer_hf(query: str, context_chunks: List[Dict]) -> str:
-    """Generar respuesta usando HuggingFace gratis"""
+    """Generar respuesta usando modelos HF que funcionan"""
     try:
-        # Preparar contexto del manual
         context_text = "\n\n".join([
             f"**{chunk['section_name']} (Página {chunk['page']})**\n{chunk['content'][:500]}"
             for chunk in context_chunks[:3]
         ])
         
-        # Prompt optimizado para el manual
-        prompt = f"""Basándote únicamente en esta información del Manual de Mantenimiento, responde la consulta:
+        prompt = f"""Basándote en esta información del Manual de Mantenimiento, responde la consulta:
 
 INFORMACIÓN DEL MANUAL:
 {context_text}
 
 CONSULTA: {query}
 
-RESPUESTA (usa formato claro con emojis técnicos):"""
+RESPUESTA (formato claro):"""
 
-        # Usar modelo gratuito de HuggingFace
         hf_token = os.getenv("HUGGINGFACE_API_TOKEN")
         
-        models_to_try = [
-            "microsoft/DialoGPT-large",
-            "facebook/blenderbot-400M-distill", 
+        # Modelos LLM que SÍ funcionan en 2025
+        working_models = [
             "microsoft/DialoGPT-medium",
-            "google/flan-t5-large"
+            "google/flan-t5-base",
+            "facebook/opt-350m",
+            "gpt2"
         ]
         
-        for model in models_to_try:
+        for model in working_models:
             try:
                 url = f"https://api-inference.huggingface.co/models/{model}"
-                headers = {
-                    "Content-Type": "application/json"
-                }
+                headers = {"Content-Type": "application/json"}
                 
                 if hf_token:
                     headers["Authorization"] = f"Bearer {hf_token}"
@@ -254,8 +250,9 @@ RESPUESTA (usa formato claro con emojis técnicos):"""
                 payload = {
                     "inputs": prompt,
                     "parameters": {
-                        "max_new_tokens": 500,
+                        "max_new_tokens": 300,
                         "temperature": 0.3,
+                        "do_sample": True,
                         "return_full_text": False
                     }
                 }
@@ -265,7 +262,6 @@ RESPUESTA (usa formato claro con emojis técnicos):"""
                 if response.status_code == 200:
                     result = response.json()
                     
-                    # Extraer respuesta según el modelo
                     if isinstance(result, list) and len(result) > 0:
                         answer = result[0].get('generated_text', '').strip()
                     elif isinstance(result, dict):
@@ -273,13 +269,10 @@ RESPUESTA (usa formato claro con emojis técnicos):"""
                     else:
                         continue
                     
-                    if answer and len(answer) > 10:
+                    if answer and len(answer) > 20:
                         logger.info(f"✅ Respuesta generada con {model}")
                         
-                        # Formatear respuesta
                         formatted_answer = f"🔧 **Manual de Mantenimiento**\n\n{answer}\n\n"
-                        
-                        # Agregar referencias
                         pages = [str(chunk['page']) for chunk in context_chunks]
                         formatted_answer += f"📚 **Referencias:** Páginas {', '.join(pages)}"
                         
@@ -293,8 +286,7 @@ RESPUESTA (usa formato claro con emojis técnicos):"""
                 logger.warning(f"⚠️ Error con {model}: {str(e)}")
                 continue
         
-        # Si todos los modelos fallan, usar fallback mejorado
-        logger.warning("⚠️ Todos los modelos HF fallaron, usando fallback")
+        logger.warning("⚠️ Todos los modelos LLM fallaron, usando fallback")
         return generate_enhanced_fallback(query, context_chunks)
         
     except Exception as e:
