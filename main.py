@@ -103,65 +103,53 @@ class QueryResponse(BaseModel):
 # REEMPLAZAR LA FUNCIÓN get_embedding_hf() EN main.py
 
 def get_embedding_hf(text: str) -> List[float]:
-    """Generar embedding usando HuggingFace con token o fallback"""
+    """Generar embedding usando HuggingFace con modelos actualizados"""
     try:
-        # Opción 1: Usar API de HuggingFace con token
         hf_token = os.getenv("HUGGINGFACE_API_TOKEN")
         
-        if hf_token:
-            url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
-            headers = {
-                "Authorization": f"Bearer {hf_token}",
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.post(
-                url,
-                headers=headers,
-                json={"inputs": text, "options": {"wait_for_model": True}},
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                embedding = response.json()
-                result = embedding[0] if isinstance(embedding[0], list) else embedding
-                logger.info(f"✅ HuggingFace embedding generado correctamente")
-                return result
-            else:
-                logger.warning(f"⚠️ HuggingFace API falló: {response.status_code}, usando fallback")
+        # Modelos de embeddings que SÍ funcionan en 2025
+        embedding_models = [
+            "sentence-transformers/all-MiniLM-L6-v2",
+            "sentence-transformers/all-mpnet-base-v2", 
+            "intfloat/e5-small-v2",
+            "BAAI/bge-small-en-v1.5"
+        ]
         
-        # Opción 2: Fallback - embedding simple basado en hash
-        # Esto es temporal hasta que configures el token
-        import hashlib
-        import struct
+        for model in embedding_models:
+            try:
+                url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{model}"
+                headers = {"Content-Type": "application/json"}
+                
+                if hf_token:
+                    headers["Authorization"] = f"Bearer {hf_token}"
+                
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json={"inputs": text, "options": {"wait_for_model": True}},
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    embedding = response.json()
+                    result = embedding[0] if isinstance(embedding[0], list) else embedding
+                    logger.info(f"✅ Embedding generado con {model}")
+                    return result
+                else:
+                    logger.warning(f"⚠️ {model} falló: {response.status_code}")
+                    continue
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Error con {model}: {str(e)}")
+                continue
         
-        # Crear un embedding determinístico basado en el texto
-        text_hash = hashlib.md5(text.encode()).digest()
-        
-        # Convertir a vector de 384 dimensiones (compatible con all-MiniLM-L6-v2)
-        embedding = []
-        for i in range(0, len(text_hash), 4):
-            if i + 4 <= len(text_hash):
-                value = struct.unpack('f', text_hash[i:i+4])[0]
-                embedding.append(float(value))
-        
-        # Completar hasta 384 dimensiones
-        while len(embedding) < 384:
-            embedding.append(0.1)
-        
-        # Normalizar
-        import math
-        norm = math.sqrt(sum(x*x for x in embedding))
-        if norm > 0:
-            embedding = [x/norm for x in embedding]
-        
-        logger.info(f"⚠️ Usando embedding fallback para: '{text[:50]}...'")
-        return embedding[:384]  # Asegurar exactamente 384 dimensiones
+        # Si todos fallan, usar fallback mejorado
+        logger.warning("⚠️ Todos los modelos de embeddings fallaron, usando fallback")
+        return generate_fallback_embedding(text)
         
     except Exception as e:
         logger.error(f"❌ Error generando embedding: {str(e)}")
-        # Embedding por defecto si todo falla
-        return [0.1] * 384
+        return generate_fallback_embedding(text)
 
 def search_similar_chunks(query: str, section_filter: str = None, limit: int = 5) -> List[Dict]:
     """Buscar chunks similares en Qdrant"""
