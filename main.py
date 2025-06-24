@@ -222,80 +222,116 @@ def search_similar_chunks(query: str, section_filter: str = None, limit: int = 5
         logger.error(f"❌ Error en búsqueda: {str(e)}")
         return []
 
-def generate_answer_groq(query: str, context_chunks: List[Dict]) -> str:
-    """Generar respuesta usando Groq"""
+# REEMPLAZAR generate_answer_groq() CON ESTA FUNCIÓN EN main.py
+
+def generate_answer_hf(query: str, context_chunks: List[Dict]) -> str:
+    """Generar respuesta usando HuggingFace gratis"""
     try:
-        if not GROQ_API_KEY:
-            return generate_fallback_answer(query, context_chunks)
+        # Preparar contexto del manual
+        context_text = "\n\n".join([
+            f"**{chunk['section_name']} (Página {chunk['page']})**\n{chunk['content'][:500]}"
+            for chunk in context_chunks[:3]
+        ])
         
-        # Preparar contexto
-        context_text = ""
-        for i, chunk in enumerate(context_chunks, 1):
-            context_text += f"\n--- FUENTE {i} ---\n"
-            context_text += f"Sección: {chunk['section_name']}\n"
-            context_text += f"Página: {chunk['page']}\n"
-            context_text += f"Contenido: {chunk['content'][:800]}...\n"
-            
-            # Agregar info de imágenes si las hay
-            if chunk.get('images'):
-                context_text += f"Imágenes disponibles: {len(chunk['images'])} imágenes técnicas\n"
-        
-        # Prompt especializado
-        system_prompt = """Eres un experto en mantenimiento de Salones del Reino. Respondes consultas basándote ÚNICAMENTE en el manual oficial.
+        # Prompt optimizado para el manual
+        prompt = f"""Basándote únicamente en esta información del Manual de Mantenimiento, responde la consulta:
 
-INSTRUCCIONES:
-1. Usa SOLO la información del manual proporcionada
-2. Sé específico y técnico pero comprensible
-3. Menciona números de página cuando sea relevante
-4. Si hay imágenes disponibles, menciónalas como "Ver imágenes técnicas"
-5. Estructura la respuesta de manera clara
-6. Si no tienes suficiente información, dilo claramente
-
-FORMATO DE RESPUESTA:
-🔧 [Título de la respuesta]
-
-[Respuesta técnica detallada]
-
-📄 Fuentes: Páginas [números]
-🖼️ [Mencionar si hay imágenes disponibles]"""
-
-        user_prompt = f"""CONSULTA: {query}
-
-CONTEXTO DEL MANUAL:
+INFORMACIÓN DEL MANUAL:
 {context_text}
 
-Responde la consulta basándote únicamente en la información del manual."""
+CONSULTA: {query}
 
-        # Llamada a Groq
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
+RESPUESTA (usa formato claro con emojis técnicos):"""
+
+        # Usar modelo gratuito de HuggingFace
+        hf_token = os.getenv("HUGGINGFACE_API_TOKEN")
         
-        payload = {
-            "model": "llama-3.1-8b-instant",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.3,
-            "max_tokens": 1000
-        }
+        models_to_try = [
+            "microsoft/DialoGPT-large",
+            "facebook/blenderbot-400M-distill", 
+            "microsoft/DialoGPT-medium",
+            "google/flan-t5-large"
+        ]
         
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        for model in models_to_try:
+            try:
+                url = f"https://api-inference.huggingface.co/models/{model}"
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                
+                if hf_token:
+                    headers["Authorization"] = f"Bearer {hf_token}"
+                
+                payload = {
+                    "inputs": prompt,
+                    "parameters": {
+                        "max_new_tokens": 500,
+                        "temperature": 0.3,
+                        "return_full_text": False
+                    }
+                }
+                
+                response = requests.post(url, headers=headers, json=payload, timeout=30)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    # Extraer respuesta según el modelo
+                    if isinstance(result, list) and len(result) > 0:
+                        answer = result[0].get('generated_text', '').strip()
+                    elif isinstance(result, dict):
+                        answer = result.get('generated_text', '').strip()
+                    else:
+                        continue
+                    
+                    if answer and len(answer) > 10:
+                        logger.info(f"✅ Respuesta generada con {model}")
+                        
+                        # Formatear respuesta
+                        formatted_answer = f"🔧 **Manual de Mantenimiento**\n\n{answer}\n\n"
+                        
+                        # Agregar referencias
+                        pages = [str(chunk['page']) for chunk in context_chunks]
+                        formatted_answer += f"📚 **Referencias:** Páginas {', '.join(pages)}"
+                        
+                        return formatted_answer
+                        
+                else:
+                    logger.warning(f"⚠️ {model} falló: {response.status_code}")
+                    continue
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Error con {model}: {str(e)}")
+                continue
         
-        if response.status_code == 200:
-            data = response.json()
-            answer = data['choices'][0]['message']['content']
-            return answer
-        else:
-            logger.error(f"❌ Error Groq: {response.status_code}")
-            return generate_fallback_answer(query, context_chunks)
-            
+        # Si todos los modelos fallan, usar fallback mejorado
+        logger.warning("⚠️ Todos los modelos HF fallaron, usando fallback")
+        return generate_enhanced_fallback(query, context_chunks)
+        
     except Exception as e:
-        logger.error(f"❌ Error generando respuesta: {str(e)}")
-        return generate_fallback_answer(query, context_chunks)
+        logger.error(f"❌ Error generando respuesta HF: {str(e)}")
+        return generate_enhanced_fallback(query, context_chunks)
+
+def generate_enhanced_fallback(query: str, context_chunks: List[Dict]) -> str:
+    """Fallback mejorado sin IA"""
+    if not context_chunks:
+        return f"❌ No encontré información sobre '{query}' en el manual."
+    
+    answer = f"🔧 **{query}**\n\n"
+    
+    for i, chunk in enumerate(context_chunks, 1):
+        answer += f"📄 **{chunk['section_name']} (Página {chunk['page']})**\n"
+        content = chunk['content'][:400].strip()
+        answer += f"{content}...\n\n"
+        
+        if chunk.get('images'):
+            answer += f"🖼️ Ver {len(chunk['images'])} imágenes técnicas en el manual\n\n"
+    
+    pages = [str(chunk['page']) for chunk in context_chunks]
+    answer += f"📚 **Consultar páginas {', '.join(pages)} del manual para procedimientos completos**"
+    
+    return answer
 
 def generate_fallback_answer(query: str, context_chunks: List[Dict]) -> str:
     """Respuesta de emergencia sin LLM"""
