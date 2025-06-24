@@ -1,8 +1,18 @@
+# FastAPI y servidor
 fastapi
 uvicorn[standard]
 python-multipart
+
+# Clientes HTTP
 httpx
+requests
+
+# LLM y AI
 groq
+
+# Utilidades
 python-dotenv
 pydantic
+
+# Monitoreo del sistema
 psutil
