@@ -433,7 +433,7 @@ async def query_manual(request: QueryRequest):
             )
         
         # Generar respuesta con LLM
-        answer = generate_answer_groq(request.query, search_results)
+        answer = generate_answer_hf(request.query, search_results)
         
         # Procesar fuentes para respuesta
         sources = []
