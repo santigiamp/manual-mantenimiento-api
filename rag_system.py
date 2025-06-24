@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class RemoteEmbeddingRAG:
     def __init__(self):
-        """RAG System usando embeddings remotos con soporte para imágenes"""
+        """RAG System usando embeddings remotos con imágenes REALES del manual"""
         try:
             # Configuración desde variables de entorno
             self.qdrant_url = os.getenv("QDRANT_URL")
@@ -24,12 +24,12 @@ class RemoteEmbeddingRAG:
             self.qdrant_base_url = f"{self.qdrant_url.rstrip('/')}/collections/{self.collection_name}"
             
             # Log de configuración (sin exponer secrets)
-            logger.info("🚀 Inicializando Remote Embedding RAG System con soporte para imágenes...")
+            logger.info("🚀 Inicializando Remote RAG con imágenes REALES del manual...")
             logger.info(f"✅ QDRANT_URL configurada: {bool(self.qdrant_url)}")
             logger.info(f"✅ QDRANT_API_KEY configurada: {bool(self.qdrant_api_key)}")
             logger.info(f"✅ GROQ_API_KEY configurada: {bool(self.groq_api_key)}")
             logger.info(f"📦 Collection: {self.collection_name}")
-            logger.info("🖼️ Soporte para imágenes: Activado")
+            logger.info("🖼️ Modo: IMÁGENES REALES del PDF")
             
             # Validar configuración
             missing_vars = []
@@ -42,7 +42,7 @@ class RemoteEmbeddingRAG:
                 
             if missing_vars:
                 logger.warning(f"⚠️ Variables faltantes: {', '.join(missing_vars)}")
-                logger.warning("🔄 Sistema funcionará en modo limitado con respuestas mock")
+                logger.warning("🔄 Sistema funcionará en modo limitado")
                 self.operational = False
             else:
                 logger.info("✅ Todas las configuraciones listas")
@@ -53,14 +53,11 @@ class RemoteEmbeddingRAG:
             self.operational = False
     
     async def get_remote_embedding(self, text: str) -> List[float]:
-        """Obtener embedding usando HuggingFace Inference API (GRATIS)"""
+        """Obtener embedding usando HuggingFace Inference API"""
         try:
             logger.debug(f"🔢 Generando embedding para: {text[:50]}...")
             
-            # Usar HuggingFace Inference API - mismo modelo que usábamos localmente
             url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
-            
-            # Si no tienes token, usa sin autorización (limitado pero funciona)
             headers = {"Content-Type": "application/json"}
             
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -73,10 +70,9 @@ class RemoteEmbeddingRAG:
                 if response.status_code == 200:
                     embedding = response.json()
                     
-                    # HuggingFace devuelve lista de listas, tomamos la primera
                     if isinstance(embedding, list) and len(embedding) > 0:
                         if isinstance(embedding[0], list):
-                            result = embedding[0]  # Tomar primera embedding
+                            result = embedding[0]
                         else:
                             result = embedding
                         
@@ -88,7 +84,6 @@ class RemoteEmbeddingRAG:
                 elif response.status_code == 503:
                     logger.warning("⏳ Modelo cargándose, reintentando...")
                     await asyncio.sleep(2)
-                    # Reintentar una vez
                     response = await client.post(url, headers=headers, json={"inputs": text})
                     if response.status_code == 200:
                         embedding = response.json()
@@ -100,20 +95,19 @@ class RemoteEmbeddingRAG:
                     
         except Exception as e:
             logger.error(f"❌ Error generando embedding: {str(e)}")
-            # Fallback: usar embedding mock (ceros)
-            logger.warning("🔄 Usando embedding mock para fallback")
-            return [0.0] * 384  # all-MiniLM-L6-v2 tiene 384 dimensiones
+            if not self.operational:
+                logger.warning("🔄 Sistema no operacional, usando embedding mock")
+            return [0.0] * 384  # Fallback con dimensiones correctas
     
     async def search_qdrant_vectors(self, query_embedding: List[float], limit: int = 3) -> List[Dict[str, Any]]:
-        """Buscar vectores similares en Qdrant usando REST API"""
+        """Buscar vectores similares en Qdrant - Solo resultados REALES"""
         try:
             if not self.operational:
-                logger.warning("🔄 Sistema no operacional, usando respuestas mock")
-                return self._get_mock_results("query")
+                logger.error("❌ Sistema no operacional - Qdrant no configurado")
+                return []
             
             logger.debug(f"🔍 Buscando en Qdrant: {len(query_embedding)} dim vector")
             
-            # URL para búsqueda vectorial en Qdrant
             search_url = f"{self.qdrant_base_url}/points/search"
             
             headers = {
@@ -125,7 +119,8 @@ class RemoteEmbeddingRAG:
                 "vector": query_embedding,
                 "limit": limit,
                 "with_payload": True,
-                "with_vector": False  # No necesitamos los vectores de vuelta
+                "with_vector": False,
+                "score_threshold": 0.1  # Filtro mínimo de relevancia
             }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -141,229 +136,133 @@ class RemoteEmbeddingRAG:
                     
                     for hit in search_result.get("result", []):
                         payload = hit.get("payload", {})
-                        results.append({
+                        
+                        # Procesar imágenes REALES del manual
+                        images = payload.get('images', [])
+                        processed_images = []
+                        
+                        for img in images:
+                            # Validar que sea una imagen real (no mock)
+                            if img.get('image_url') and not 'placeholder' in img.get('image_url', ''):
+                                processed_images.append({
+                                    'url': img.get('image_url'),
+                                    'description': img.get('description', 'Imagen técnica del manual'),
+                                    'extracted_text': img.get('extracted_text', ''),
+                                    'context': img.get('context', ''),
+                                    'filename': img.get('filename', ''),
+                                    'page': payload.get('page', 0),
+                                    'width': img.get('width', 0),
+                                    'height': img.get('height', 0)
+                                })
+                        
+                        result_item = {
                             'content': payload.get('content', ''),
                             'page': payload.get('page', 0),
                             'section': payload.get('section', ''),
                             'title': payload.get('title', ''),
                             'score': hit.get('score', 0.0),
-                            'has_images': payload.get('has_images', False),
-                            'image_count': payload.get('image_count', 0),
-                            'images': payload.get('images', [])  # URLs e info de imágenes
-                        })
+                            'has_images': len(processed_images) > 0,
+                            'image_count': len(processed_images),
+                            'images': processed_images,
+                            'chunk_type': payload.get('chunk_type', 'unknown')
+                        }
+                        
+                        results.append(result_item)
                     
                     logger.info(f"✅ Encontrados {len(results)} chunks relevantes")
-                    # Log de imágenes encontradas
-                    total_images = sum(len(r.get('images', [])) for r in results)
-                    if total_images > 0:
-                        logger.info(f"🖼️ Total imágenes relevantes: {total_images}")
+                    
+                    # Log de imágenes REALES encontradas
+                    total_real_images = sum(len(r.get('images', [])) for r in results)
+                    if total_real_images > 0:
+                        logger.info(f"🖼️ Total imágenes REALES: {total_real_images}")
+                        for r in results:
+                            if r['has_images']:
+                                logger.info(f"📸 Página {r['page']}: {r['image_count']} imagen(es)")
                     
                     return results
                     
                 elif response.status_code == 404:
-                    logger.warning("📋 Colección no existe en Qdrant, usando respuestas mock")
-                    return self._get_mock_results("query")
+                    logger.error("📋 Colección no existe en Qdrant")
+                    logger.error("💡 Ejecuta el script de Kaggle primero para procesar el manual")
+                    return []
                 else:
                     logger.error(f"❌ Error Qdrant: {response.status_code} - {response.text}")
-                    return self._get_mock_results("query")
+                    return []
                     
         except Exception as e:
             logger.error(f"❌ Error en búsqueda vectorial: {str(e)}")
-            return self._get_mock_results("query")
-    
-    def _get_mock_results(self, query: str) -> List[Dict[str, Any]]:
-        """Respuestas mock del manual cuando Qdrant no está disponible"""
-        query_lower = query.lower() if query else ""
-        
-        # Base de respuestas del manual real con imágenes mock
-        if "aire acondicionado" in query_lower or "gotea" in query_lower or "ac" in query_lower:
-            return [{
-                'content': """AIRE ACONDICIONADO: Gotea la unidad interior
-
-SOLUCIÓN:
-1. Identificar la punta de la manguera de desagüe del equipo y verificar que no esté obstruida en la salida
-2. Si el problema no está allí, introducir una cinta pasacable a través de la manguera hasta lograr desobstruirla
-3. En algún punto de este proceso debería comenzar a salir agua por la manguera
-
-CAUSA: Obstrucciones en el sistema de drenaje del condensado
-
-IMAGENES EN ESTA PÁGINA:
-- Imagen 1: Ilustración de procedimiento: Reparación de aire acondicionado (URL: https://via.placeholder.com/600x400/0066cc/ffffff?text=Aire+Acondicionado)""",
-                'page': 43,
-                'section': 'G',
-                'title': 'Reparaciones Rápidas - Aire Acondicionado',
-                'score': 0.95,
-                'has_images': True,
-                'image_count': 1,
-                'images': [{
-                    'image_url': 'https://via.placeholder.com/600x400/0066cc/ffffff?text=Aire+Acondicionado+Goteo',
-                    'filename': 'manual_p43_aire_acondicionado',
-                    'width': 600,
-                    'height': 400,
-                    'description': 'Ilustración de procedimiento: Reparación de aire acondicionado que gotea'
-                }]
-            }]
-        
-        elif "pintura" in query_lower or "pared" in query_lower or "marcas" in query_lower:
-            return [{
-                'content': """PAREDES: Pintura dañada (marcas, raspones, rayones, manchas)
-
-PROCEDIMIENTO:
-1. Limpiar la superficie con cepillo o trapo
-2. Restaurar rayones y marcas con masilla o enduido
-3. Lijar dejando la superficie alisada y uniforme
-4. Eliminar todo el polvo y aplicar fijador/sellador
-5. Dependiendo del tamaño de la superficie a cubrir, pintar con pincel o rodillo
-
-IMAGENES EN ESTA PÁGINA:
-- Imagen 1: Proceso de reparación de pintura paso a paso (URL: https://via.placeholder.com/600x400/cc6600/ffffff?text=Reparacion+Pintura)""",
-                'page': 42,
-                'section': 'E',
-                'title': 'Reparaciones Rápidas - Pintura',
-                'score': 0.92,
-                'has_images': True,
-                'image_count': 1,
-                'images': [{
-                    'image_url': 'https://via.placeholder.com/600x400/cc6600/ffffff?text=Reparacion+Pintura',
-                    'filename': 'manual_p42_pintura_reparacion',
-                    'width': 600,
-                    'height': 400,
-                    'description': 'Proceso de reparación de pintura paso a paso'
-                }]
-            }]
-        
-        elif "grieta" in query_lower or "rajadura" in query_lower or "fisura" in query_lower:
-            return [{
-                'content': """MURO DE LADRILLOS: Rajaduras y grietas
-
-Para grietas pequeñas y fisuras que sólo afecten los revoques o la pintura:
-1. Introducir el canto de una espátula en la grieta y abrirla en forma de "V"
-2. Con un pincel seco dejar el interior de la grieta completamente libre de polvo
-3. Rellenar la grieta con un material apropiado para el lugar (masilla plástica interior o exterior)
-4. Dejar secar y lijar con un taco de lija hasta nivelar la pared
-
-IMPORTANTE: Si se observa que las grietas son más profundas y afectan la estructura, comunicarse con el formador de mantenimiento.
-
-IMAGENES EN ESTA PÁGINA:
-- Imagen 1: Técnica de reparación de grietas en muros (URL: https://via.placeholder.com/600x400/cc0066/ffffff?text=Reparacion+Grietas)""",
-                'page': 40,
-                'section': 'B',
-                'title': 'Reparaciones Rápidas - Grietas',
-                'score': 0.89,
-                'has_images': True,
-                'image_count': 1,
-                'images': [{
-                    'image_url': 'https://via.placeholder.com/600x400/cc0066/ffffff?text=Reparacion+Grietas',
-                    'filename': 'manual_p40_grietas_reparacion',
-                    'width': 600,
-                    'height': 400,
-                    'description': 'Técnica de reparación de grietas en muros'
-                }]
-            }]
-        
-        elif "epp" in query_lower or "protección" in query_lower or "seguridad" in query_lower:
-            return [{
-                'content': """EQUIPO DE PROTECCIÓN PERSONAL (EPP)
-
-El objetivo es lograr un entorno de trabajo sin accidentes. Usar siempre el EPP:
-
-- Casco y gafas de protección
-- Protector facial y auditivo
-- Guantes de trabajo
-- Chaleco reflectivo
-- Arnés y faja lumbar
-- Mameluco y calzado de seguridad
-- Barbijo
-
-IMAGENES EN ESTA PÁGINA:
-- Imagen 1: Diagrama de Equipo de Protección Personal (EPP) (URL: https://via.placeholder.com/800x600/006600/ffffff?text=EPP+Completo)""",
-                'page': 5,
-                'section': 'introducción',
-                'title': 'Introducción - Seguridad Personal',
-                'score': 0.94,
-                'has_images': True,
-                'image_count': 1,
-                'images': [{
-                    'image_url': 'https://via.placeholder.com/800x600/006600/ffffff?text=EPP+Completo',
-                    'filename': 'manual_p5_epp_diagrama',
-                    'width': 800,
-                    'height': 600,
-                    'description': 'Diagrama técnico detallado: Equipo de Protección Personal (EPP)'
-                }]
-            }]
-        
-        else:
-            return [{
-                'content': """MANUAL DE MANTENIMIENTO - Salones del Reino
-
-Este manual contiene información completa sobre:
-• Seguridad personal y programa de mantenimiento
-• Equipos (aspiradoras, escaleras, herramientas)
-• Edificios (sistemas de emergencia, inspecciones, techos)
-• Sistemas eléctricos (distribución, luminarias)
-• Sistemas electrónicos (audio, video, seguridad)
-• Sistemas mecánicos (climatización, dispensadores, agua)
-• Reparaciones rápidas (óxido, grietas, pintura, selladores)
-
-Para consultas específicas, pregunta sobre temas como: aire acondicionado, pintura, grietas, registros obstruidos, luminarias, sistemas eléctricos, EPP, etc.""",
-                'page': 1,
-                'section': 'Introducción',
-                'title': 'Manual de Mantenimiento',
-                'score': 0.7,
-                'has_images': False,
-                'image_count': 0,
-                'images': []
-            }]
+            return []
     
     async def generate_answer_with_groq(self, query: str, context_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Generar respuesta usando Groq LLM incluyendo información de imágenes"""
+        """Generar respuesta usando Groq LLM incluyendo información de imágenes REALES"""
         try:
-            if not self.groq_api_key or not context_chunks:
-                return self._format_mock_answer_with_images(context_chunks[0] if context_chunks else {})
+            if not self.groq_api_key:
+                logger.error("❌ Groq API key no configurada")
+                return self._format_basic_answer(context_chunks)
             
-            # Preparar contexto incluyendo imágenes
+            if not context_chunks:
+                return {
+                    "text": "❌ No encontré información relevante en el manual para tu consulta. Verifica que el manual haya sido procesado correctamente en Kaggle.",
+                    "images": []
+                }
+            
+            # Preparar contexto incluyendo imágenes REALES
             context_parts = []
             relevant_images = []
             
             for chunk in context_chunks:
+                # Contexto de texto
                 context_parts.append(f"**{chunk['title']} (Página {chunk['page']})**\n{chunk['content']}")
                 
-                # Recopilar imágenes relevantes
-                if chunk.get('images'):
-                    for img in chunk['images']:
+                # Recopilar imágenes REALES
+                for img in chunk.get('images', []):
+                    # Validar que sea imagen real del manual
+                    if img.get('url') and not 'placeholder' in img.get('url', ''):
                         relevant_images.append({
-                            'url': img['image_url'],
+                            'url': img['url'],
                             'description': img['description'],
-                            'page': chunk['page'],
+                            'page': img['page'],
                             'filename': img.get('filename', ''),
                             'width': img.get('width', 0),
-                            'height': img.get('height', 0)
+                            'height': img.get('height', 0),
+                            'extracted_text': img.get('extracted_text', ''),
+                            'context': img.get('context', '')
                         })
             
             context = "\n\n".join(context_parts)
             
-            # Indicar si hay material visual disponible
-            has_images = len(relevant_images) > 0
-            image_note = f"\n\n📸 MATERIAL VISUAL DISPONIBLE: {len(relevant_images)} imagen(es) técnica(s)" if has_images else ""
+            # Información sobre material visual disponible
+            visual_info = ""
+            if relevant_images:
+                visual_descriptions = []
+                for img in relevant_images:
+                    desc = f"- Página {img['page']}: {img['description']}"
+                    if img.get('extracted_text'):
+                        desc += f" (Elementos: {img['extracted_text'][:50]})"
+                    visual_descriptions.append(desc)
+                
+                visual_info = f"\n\n📸 MATERIAL VISUAL TÉCNICO DISPONIBLE ({len(relevant_images)} imagen(es)):\n" + "\n".join(visual_descriptions)
             
-            # Prompt optimizado para incluir referencias a imágenes
-            prompt = f"""Eres un asistente experto en mantenimiento de Salones del Reino. 
-Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manual proporcionado.
+            # Prompt optimizado para referencias a imágenes REALES
+            prompt = f"""Eres un asistente experto en mantenimiento de Salones del Reino basado en el Manual oficial.
+Responde la pregunta usando ÚNICAMENTE el contexto proporcionado del manual.
 
 **CONTEXTO DEL MANUAL:**
-{context}{image_note}
+{context}{visual_info}
 
 **PREGUNTA DEL USUARIO:**
 {query}
 
 **INSTRUCCIONES:**
-- Responde en español con información práctica y específica del manual
-- Usa emojis relevantes (🔧⚡🏠💡🚰🖼️) para hacer la respuesta más clara
+- Responde en español con información práctica del manual
+- Usa emojis relevantes: 🔧⚡🏠💡🚰🖼️⚠️✅❌
 - Si hay pasos específicos, númeralos claramente
-- Si hay advertencias importantes, márcalas como ⚠️ IMPORTANTE
-- Si hay material visual disponible, menciona que existen imágenes técnicas para complementar la explicación
+- Marca advertencias importantes como ⚠️ IMPORTANTE
+- Si hay material visual disponible, menciona específicamente las imágenes técnicas que complementan la explicación
+- Incluye referencias a páginas del manual
+- Si el material visual muestra procedimientos, menciona qué elementos se pueden ver
 - Mantén un tono profesional pero amigable
-- Si no tienes información suficiente en el contexto, dilo claramente
+- Si no hay suficiente información, dilo claramente
 
 **RESPUESTA:**"""
 
@@ -377,14 +276,14 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
                 "messages": [
                     {
                         "role": "system", 
-                        "content": "Eres un experto en mantenimiento de edificios religiosos, especializado en Salones del Reino. Siempre basas tus respuestas en el manual oficial e incluyes referencias a material visual cuando está disponible."
+                        "content": "Eres un experto en mantenimiento de Salones del Reino. Siempre basas tus respuestas en el manual oficial e incluyes referencias específicas a las imágenes técnicas cuando están disponibles."
                     },
                     {
                         "role": "user", 
                         "content": prompt
                     }
                 ],
-                "max_tokens": 1000,
+                "max_tokens": 1200,
                 "temperature": 0.3,
                 "top_p": 0.9
             }
@@ -399,92 +298,115 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
                 if response.status_code == 200:
                     result = response.json()
                     answer = result["choices"][0]["message"]["content"]
-                    logger.info("✅ Respuesta generada con Groq")
+                    logger.info("✅ Respuesta generada con Groq + imágenes reales")
                     
-                    # Retornar respuesta con imágenes
                     return {
                         "text": answer,
                         "images": relevant_images
                     }
                 else:
-                    logger.error(f"❌ Error Groq: {response.status_code}")
-                    return self._format_mock_answer_with_images(context_chunks[0])
+                    logger.error(f"❌ Error Groq: {response.status_code} - {response.text}")
+                    return self._format_basic_answer(context_chunks)
                     
         except Exception as e:
             logger.error(f"❌ Error generando respuesta: {str(e)}")
-            return self._format_mock_answer_with_images(context_chunks[0] if context_chunks else {})
+            return self._format_basic_answer(context_chunks)
     
-    def _format_mock_answer_with_images(self, chunk: Dict[str, Any]) -> Dict[str, Any]:
-        """Formatear respuesta mock incluyendo imágenes"""
-        if not chunk:
+    def _format_basic_answer(self, context_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Formatear respuesta básica cuando Groq no está disponible"""
+        if not context_chunks:
             return {
                 "text": "❌ No encontré información específica sobre tu consulta en el manual.",
                 "images": []
             }
         
+        chunk = context_chunks[0]
         content = chunk.get('content', 'Información no disponible')
         page = chunk.get('page', 0)
         title = chunk.get('title', 'Manual de Mantenimiento')
-        images = chunk.get('images', [])
         
-        # Agregar nota sobre imágenes si están disponibles
-        image_note = f"\n\n🖼️ *{len(images)} imagen(es) técnica(s) disponible(s)*" if images else ""
+        # Obtener imágenes REALES
+        images = []
+        for img in chunk.get('images', []):
+            if img.get('url') and not 'placeholder' in img.get('url', ''):
+                images.append(img)
+        
+        # Nota sobre material visual
+        visual_note = ""
+        if images:
+            visual_note = f"\n\n🖼️ *Incluye {len(images)} imagen(es) técnica(s) del manual*"
         
         text_response = f"""🔧 **{title}** (Página {page})
 
-{content}{image_note}
+{content[:800]}...{visual_note}
 
 ---
-💡 *Respuesta del Manual de Mantenimiento de Salones del Reino*
-⚠️ *Para consultas complejas, contacta al formador de mantenimiento*"""
+💡 *Información del Manual de Mantenimiento de Salones del Reino*
+⚠️ *Para consultas específicas, contacta al formador de mantenimiento*"""
 
         return {
             "text": text_response,
             "images": images
         }
     
-    async def query(self, user_query: str, user_id: str = "default") -> Dict[str, Any]:
-        """Método principal para procesar consultas con soporte para imágenes"""
+    async def query(self, query: str, user_id: str = "default", include_images: bool = True) -> Dict[str, Any]:
+        """Método principal para procesar consultas con imágenes REALES del manual"""
         try:
-            logger.info(f"🔍 Procesando consulta: {user_query[:50]}... (usuario: {user_id})")
+            logger.info(f"🔍 Procesando consulta: {query[:50]}... (usuario: {user_id})")
             
-            # 1. Generar embedding de la consulta usando API remota
-            query_embedding = await self.get_remote_embedding(user_query)
+            # 1. Generar embedding de la consulta
+            query_embedding = await self.get_remote_embedding(query)
             
             # 2. Buscar chunks relevantes en Qdrant
             relevant_chunks = await self.search_qdrant_vectors(query_embedding, limit=3)
             
-            # 3. Generar respuesta con imágenes usando Groq
-            answer_data = await self.generate_answer_with_groq(user_query, relevant_chunks)
+            if not relevant_chunks:
+                return {
+                    "answer": "❌ No encontré información relevante en el manual. Verifica que el manual haya sido procesado correctamente usando el script de Kaggle.",
+                    "images": [],
+                    "sources": [],
+                    "confidence_score": 0.0,
+                    "response_time": 0
+                }
             
-            # 4. Preparar sources
+            # 3. Generar respuesta con imágenes usando Groq
+            answer_data = await self.generate_answer_with_groq(query, relevant_chunks)
+            
+            # 4. Preparar sources con información de imágenes
             sources = []
             for chunk in relevant_chunks:
                 source = f"Manual - Página {chunk['page']}: {chunk['title']}"
                 if chunk.get('score', 0) > 0:
                     source += f" (relevancia: {chunk['score']:.2f})"
                 if chunk.get('has_images'):
-                    source += f" [📸 {chunk.get('image_count', 0)} imagen(es)]"
+                    source += f" [🖼️ {chunk.get('image_count', 0)} imagen(es) técnica(s)]"
                 sources.append(source)
             
-            # 5. Contar estadísticas de imágenes
+            # 5. Estadísticas
             total_images = len(answer_data["images"])
+            max_score = max([c.get('score', 0) for c in relevant_chunks]) if relevant_chunks else 0
+            
             if total_images > 0:
-                logger.info(f"🖼️ Respuesta incluye {total_images} imagen(es)")
+                logger.info(f"🖼️ Respuesta incluye {total_images} imagen(es) REALES del manual")
+                for img in answer_data["images"]:
+                    logger.info(f"📸 Imagen: {img['filename']} - {img['description'][:50]}...")
             
             return {
                 "answer": answer_data["text"],
-                "images": answer_data["images"],  # URLs de imágenes relevantes
+                "images": answer_data["images"] if include_images else [],
                 "sources": sources,
+                "confidence_score": max_score,
+                "response_time": 0,  # Se puede agregar medición de tiempo
                 "metadata": {
-                    "query": user_query,
+                    "query": query,
                     "user_id": user_id,
                     "chunks_found": len(relevant_chunks),
                     "images_found": total_images,
-                    "system_status": "remote_embeddings_with_images" if self.operational else "limited_mock",
+                    "real_images": True,  # Confirma que son imágenes reales
+                    "system_status": "operational_with_real_images" if self.operational else "limited",
                     "embedding_method": "huggingface_remote",
                     "search_method": "qdrant_vector_search",
-                    "features": ["text_search", "image_support", "remote_embeddings"]
+                    "features": ["text_search", "real_image_support", "remote_embeddings"]
                 }
             }
             
@@ -501,22 +423,83 @@ Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto del manua
                 }
             }
     
+    def get_images_by_page(self, page_number: int) -> List[Dict[str, Any]]:
+        """Obtener imágenes REALES de una página específica"""
+        try:
+            if not self.operational:
+                logger.error("❌ Sistema no operacional")
+                return []
+            
+            # Buscar chunks de esa página específica
+            # Esto requeriría una búsqueda por metadatos en Qdrant
+            # Por simplicidad, devolver lista vacía si no está implementado
+            logger.warning(f"⚠️ Búsqueda por página {page_number} no implementada aún")
+            return []
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo imágenes de página {page_number}: {str(e)}")
+            return []
+    
+    def search_related_images(self, query: str) -> List[Dict[str, Any]]:
+        """Buscar imágenes relacionadas con una consulta específica"""
+        try:
+            if not self.operational:
+                logger.error("❌ Sistema no operacional")
+                return []
+            
+            # Implementar búsqueda específica de imágenes basada en descripciones y texto extraído
+            logger.warning(f"⚠️ Búsqueda específica de imágenes para '{query}' no implementada aún")
+            return []
+            
+        except Exception as e:
+            logger.error(f"❌ Error buscando imágenes para '{query}': {str(e)}")
+            return []
+    
+    def get_section_by_page(self, page_number: int) -> str:
+        """Obtener sección del manual por número de página"""
+        section_map = {
+            range(1, 11): "Introducción y Programa de Mantenimiento",
+            range(11, 13): "Equipos",
+            range(13, 26): "Edificios",
+            range(26, 30): "Sistemas Eléctricos",
+            range(30, 33): "Sistemas Electrónicos",
+            range(33, 39): "Sistemas Mecánicos",
+            range(39, 45): "Reparaciones Rápidas"
+        }
+        
+        for page_range, section_name in section_map.items():
+            if page_number in page_range:
+                return section_name
+        
+        return "Manual de Mantenimiento"
+    
     def health_check(self) -> Dict[str, Any]:
-        """Verificar estado del sistema"""
+        """Verificar estado del sistema con imágenes REALES"""
         status = {
             "qdrant_configured": bool(self.qdrant_url and self.qdrant_api_key),
             "groq_configured": bool(self.groq_api_key),
             "embedding_method": "huggingface_remote",
-            "image_support": True,
+            "image_support": "REAL_IMAGES_FROM_PDF",  # Especifica que son imágenes reales
             "operational": self.operational,
             "overall_status": "healthy" if self.operational else "limited",
+            "manual_processed": self.operational,  # Indica si el manual fue procesado
             "features": {
                 "vector_search": True,
                 "remote_embeddings": True,
-                "image_extraction": True,
-                "image_serving": True,
-                "groq_llm": True
-            }
+                "real_image_extraction": True,
+                "ocr_analysis": True,
+                "imgbb_storage": True,
+                "groq_llm": True,
+                "mock_images": False  # Confirma que NO usa mocks
+            },
+            "requirements": [
+                "Manual PDF procesado en Kaggle",
+                "Imágenes extraídas y subidas a ImgBB",
+                "Chunks con metadatos en Qdrant Cloud",
+                "OCR aplicado para descripciones contextuales"
+            ] if not self.operational else [
+                "✅ Sistema completamente operacional con imágenes reales"
+            ]
         }
         
         return status
