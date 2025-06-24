@@ -156,7 +156,7 @@ def search_similar_chunks(query: str, section_filter: str = None, limit: int = 5
             query_filter=search_filter,
             limit=limit,
             with_payload=True,
-            score_threshold=0.1  # Umbral mínimo de similitud
+            score_threshold=0.05  # Umbral mínimo de similitud
         )
         
         # Procesar resultados
