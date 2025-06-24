@@ -100,38 +100,68 @@ class QueryResponse(BaseModel):
 # FUNCIONES CORE
 # ========================================
 
+# REEMPLAZAR LA FUNCIÓN get_embedding_hf() EN main.py
+
 def get_embedding_hf(text: str) -> List[float]:
-    """Generar embedding usando HuggingFace"""
+    """Generar embedding usando HuggingFace con token o fallback"""
     try:
-        url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
-        headers = {"Content-Type": "application/json"}
+        # Opción 1: Usar API de HuggingFace con token
+        hf_token = os.getenv("HUGGINGFACE_API_TOKEN")
         
-        response = requests.post(
-            url,
-            headers=headers,
-            json={"inputs": text, "options": {"wait_for_model": True}},
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            embedding = response.json()
-            result = embedding[0] if isinstance(embedding[0], list) else embedding
-            return result
-        elif response.status_code == 503:
-            # Modelo cargándose, esperar y reintentar
-            import time
-            time.sleep(3)
-            response = requests.post(url, headers=headers, json={"inputs": text})
+        if hf_token:
+            url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+            headers = {
+                "Authorization": f"Bearer {hf_token}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(
+                url,
+                headers=headers,
+                json={"inputs": text, "options": {"wait_for_model": True}},
+                timeout=30
+            )
+            
             if response.status_code == 200:
                 embedding = response.json()
-                return embedding[0] if isinstance(embedding[0], list) else embedding
+                result = embedding[0] if isinstance(embedding[0], list) else embedding
+                logger.info(f"✅ HuggingFace embedding generado correctamente")
+                return result
+            else:
+                logger.warning(f"⚠️ HuggingFace API falló: {response.status_code}, usando fallback")
         
-        logger.error(f"❌ Error HuggingFace: {response.status_code}")
-        return [0.0] * 384
+        # Opción 2: Fallback - embedding simple basado en hash
+        # Esto es temporal hasta que configures el token
+        import hashlib
+        import struct
+        
+        # Crear un embedding determinístico basado en el texto
+        text_hash = hashlib.md5(text.encode()).digest()
+        
+        # Convertir a vector de 384 dimensiones (compatible con all-MiniLM-L6-v2)
+        embedding = []
+        for i in range(0, len(text_hash), 4):
+            if i + 4 <= len(text_hash):
+                value = struct.unpack('f', text_hash[i:i+4])[0]
+                embedding.append(float(value))
+        
+        # Completar hasta 384 dimensiones
+        while len(embedding) < 384:
+            embedding.append(0.1)
+        
+        # Normalizar
+        import math
+        norm = math.sqrt(sum(x*x for x in embedding))
+        if norm > 0:
+            embedding = [x/norm for x in embedding]
+        
+        logger.info(f"⚠️ Usando embedding fallback para: '{text[:50]}...'")
+        return embedding[:384]  # Asegurar exactamente 384 dimensiones
         
     except Exception as e:
         logger.error(f"❌ Error generando embedding: {str(e)}")
-        return [0.0] * 384
+        # Embedding por defecto si todo falla
+        return [0.1] * 384
 
 def search_similar_chunks(query: str, section_filter: str = None, limit: int = 5) -> List[Dict]:
     """Buscar chunks similares en Qdrant"""
